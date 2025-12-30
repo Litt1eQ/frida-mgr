@@ -1,0 +1,55 @@
+[package]
+name = "frida-mgr"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "A comprehensive Frida version manager with Python environment management"
+license = "MIT"
+
+[[bin]]
+name = "frida-mgr"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive", "cargo"] }
+colored = "3"
+indicatif = "0.18"
+
+# Configuration
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"
+directories = "6"
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+
+# HTTP
+reqwest = { version = "0.12", features = ["stream", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2"
+
+# Version management
+semver = "1.0"
+
+# File operations
+sha2 = "0.10"
+flate2 = "1.0"
+xz2 = "0.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+serde_json = "1.0"
+regex = "1.10"
+chrono = "0.4"
+once_cell = "1.19"
+quick-xml = "0.37"
+
+[dev-dependencies]
+tempfile = "3.8"

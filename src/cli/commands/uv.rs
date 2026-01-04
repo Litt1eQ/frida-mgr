@@ -9,4 +9,3 @@ pub async fn execute(args: Vec<String>) -> Result<()> {
     let exit_code = uv_mgr.run_uv_interactive(&args).await?;
     std::process::exit(exit_code);
 }
-

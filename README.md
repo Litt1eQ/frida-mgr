@@ -6,9 +6,10 @@
 
 - 项目级配置：在项目根目录生成 `frida.toml`
 - Python 环境：使用 `uv` 创建 `.venv`，并在其中安装/升级 `frida` 与 `frida-tools`
+- 工具集成：在同一虚拟环境中安装/升级 `objection`，并支持命令透传
 - 版本管理：支持 `latest` / `stable` / `lts` 等别名；可刷新版本映射
 - Android 设备管理：基于 `adb` 列设备、推送 `frida-server`、启动/停止/查看状态
-- 便捷命令：`frida-mgr frida` / `ps` / `trace` / `run` / `top(fg)` 等在虚拟环境中运行
+- 便捷命令：`frida-mgr frida` / `objection` / `ps` / `trace` / `run` / `top(fg)` / `spawn(sp)` / `objection-fg(og)` 等在虚拟环境中运行
 
 ## 依赖与前置条件
 
@@ -76,6 +77,18 @@ frida-mgr top -l agent.js -- -o out.txt
 
 `top/fg` 会自动选择设备与目标（`-D/-p/-n` 等），不要额外传 `-U/-D/-H/-p/-n/-f/-F`；需要完全控制参数请用 `frida-mgr frida ...`。
 
+- Spawn 前台应用并运行 Frida（会自动选择设备与目标包名；别名：`sp`）
+
+```bash
+frida-mgr spawn -l agent.js -- --no-pause
+```
+
+- 对前台应用运行 objection（会自动注入 `--name <package>`（新）或 `-g <package>`（旧）；默认子命令为 `start`（新）/`explore`（旧）；别名：`og`）
+
+```bash
+frida-mgr objection-fg
+```
+
 - 完全手动调用 `frida`（等价于在项目虚拟环境中运行 `frida ...`）
 
 ```bash
@@ -93,6 +106,8 @@ frida-mgr frida -U -f com.example.app -l agent.js --no-pause
 - `frida-mgr start|stop|status`：启动/停止/查看 `frida-server` 状态
 - `frida-mgr run <cmd> -- <args...>`：在虚拟环境中运行任意命令
 - `frida-mgr ps|trace`：在虚拟环境中运行 `frida-ps` / `frida-trace`
+- `frida-mgr objection ...`：在虚拟环境中运行 `objection ...`
+- `frida-mgr spawn|objection-fg`：对前台应用执行 spawn / objection（自动选设备与目标）
 - `frida-mgr shell`：进入虚拟环境 shell
 - `frida-mgr uv ...` / `frida-mgr pip ...`：透传调用 `uv` / `uv pip`（`pip` 会自动选择项目 `.venv` 的 Python）
 
@@ -111,6 +126,9 @@ packages = ["ipython", "requests"]
 [frida]
 version = "16.6.6"
 # tools_version = "13.3.0" # 可选：固定 frida-tools 版本
+
+[objection]
+# version = "1.11.0" # 可选：固定 objection 版本；不填则按全局版本映射匹配
 
 [android]
 arch = "auto"              # auto/arm/arm64/x86/x86_64

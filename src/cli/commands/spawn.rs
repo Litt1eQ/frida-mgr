@@ -28,7 +28,7 @@ pub async fn execute(
     ensure_no_forbidden_args(
         &args,
         FORBIDDEN_FRIDA_ARGS,
-        "frida-mgr top selects the device and target automatically",
+        "frida-mgr spawn selects the device and target automatically",
     )?;
 
     let foreground = resolve_foreground_context(device_id.as_deref()).await?;
@@ -37,13 +37,8 @@ pub async fn execute(
     let mut frida_args = Vec::with_capacity(8 + scripts.len() * 2 + args.len());
     frida_args.push("-D".to_string());
     frida_args.push(foreground.device.id);
-    if let Some(pid) = foreground.pid {
-        frida_args.push("-p".to_string());
-        frida_args.push(pid.to_string());
-    } else {
-        frida_args.push("-n".to_string());
-        frida_args.push(foreground.process);
-    }
+    frida_args.push("-f".to_string());
+    frida_args.push(foreground.package);
 
     for script in scripts {
         frida_args.push("-l".to_string());

@@ -1,4 +1,5 @@
 pub mod global;
+pub mod overrides;
 pub mod project;
 pub mod schema;
 pub mod validation;
@@ -7,6 +8,7 @@ pub mod version_map;
 use crate::core::error::Result;
 
 pub use global::GlobalConfigManager;
+pub use overrides::VersionOverrides;
 pub use project::ProjectConfigManager;
 pub use schema::{
     AndroidServerSource, ArchType, GlobalConfig, LocalServerConfig, ProjectConfig,

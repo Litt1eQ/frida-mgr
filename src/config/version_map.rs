@@ -1,5 +1,5 @@
 use crate::core::{ensure_dir_exists, FridaMgrError, HttpClient, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use regex::Regex;
@@ -19,6 +19,8 @@ pub struct VersionMapping {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VersionInfo {
     pub tools: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objection: Option<String>,
     pub released: String,
 }
 
@@ -34,6 +36,12 @@ pub struct ToolsVersionResolution {
     pub mapped_from_frida: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectionVersionResolution {
+    pub objection_version: String,
+    pub mapped_from_frida: String,
+}
+
 impl VersionMapping {
     pub fn builtin() -> Self {
         let mut mappings = HashMap::new();
@@ -43,6 +51,7 @@ impl VersionMapping {
             "16.6.6".to_string(),
             VersionInfo {
                 tools: "13.3.0".to_string(),
+                objection: None,
                 released: "2024-12-10".to_string(),
             },
         );
@@ -50,6 +59,7 @@ impl VersionMapping {
             "16.5.2".to_string(),
             VersionInfo {
                 tools: "13.2.2".to_string(),
+                objection: None,
                 released: "2024-11-15".to_string(),
             },
         );
@@ -57,6 +67,7 @@ impl VersionMapping {
             "16.4.0".to_string(),
             VersionInfo {
                 tools: "13.1.0".to_string(),
+                objection: None,
                 released: "2024-10-01".to_string(),
             },
         );
@@ -64,6 +75,7 @@ impl VersionMapping {
             "16.1.4".to_string(),
             VersionInfo {
                 tools: "12.2.1".to_string(),
+                objection: None,
                 released: "2024-06-15".to_string(),
             },
         );
@@ -71,6 +83,7 @@ impl VersionMapping {
             "16.0.19".to_string(),
             VersionInfo {
                 tools: "12.1.3".to_string(),
+                objection: None,
                 released: "2024-05-01".to_string(),
             },
         );
@@ -78,6 +91,7 @@ impl VersionMapping {
             "15.2.2".to_string(),
             VersionInfo {
                 tools: "12.0.4".to_string(),
+                objection: None,
                 released: "2023-12-20".to_string(),
             },
         );
@@ -85,6 +99,7 @@ impl VersionMapping {
             "15.1.17".to_string(),
             VersionInfo {
                 tools: "11.0.2".to_string(),
+                objection: None,
                 released: "2023-10-15".to_string(),
             },
         );
@@ -150,6 +165,27 @@ impl VersionMapping {
             })
     }
 
+    pub fn get_objection_version(&self, frida_version: &str) -> Option<String> {
+        let resolved = self.resolve_alias(frida_version);
+        self.mappings
+            .get(&resolved)
+            .and_then(|info| info.objection.clone())
+    }
+
+    pub fn resolve_objection_version(
+        &self,
+        frida_version: &str,
+    ) -> Option<ObjectionVersionResolution> {
+        let resolved = self.resolve_alias(frida_version);
+        self.mappings
+            .get(&resolved)
+            .and_then(|info| info.objection.clone())
+            .map(|objection_version| ObjectionVersionResolution {
+                objection_version,
+                mapped_from_frida: resolved,
+            })
+    }
+
     pub fn list_versions(&self) -> Vec<String> {
         let mut versions: Vec<String> = self.mappings.keys().cloned().collect();
         versions.sort_by(
@@ -168,26 +204,66 @@ impl VersionMapping {
         // Fallback to parsing the Releases HTML page (polite pagination).
         let frida = fetch_repo_releases(&http, "frida", "frida", include_prerelease).await?;
 
-        // Small delay to avoid hammering GitHub with back-to-back requests.
+        // Prefer PyPI as the source-of-truth for installable Python package versions.
+        // (GitHub tags don't always correspond 1:1 with PyPI releases, and dependencies can change.)
+        //
+        // If PyPI is unavailable, fall back to GitHub timestamps, but avoid pinning far-future
+        // versions to reduce incompatibility risk.
+        let (tools_by_date, tools_from_pypi) =
+            match fetch_pypi_releases(&http, "frida-tools", include_prerelease).await {
+                Ok(v) => (v, true),
+                Err(_) => {
+                    sleep(Duration::from_millis(200)).await;
+                    let v = fetch_repo_releases(&http, "frida", "frida-tools", include_prerelease)
+                        .await?
+                        .into_iter()
+                        .map(|r| PypiRelease {
+                            version: r.version,
+                            published_at: r.published_at,
+                        })
+                        .collect();
+                    (v, false)
+                }
+            };
+
+        // Objection versions should align with upstream GitHub releases (source of truth),
+        // but we filter out versions that don't exist on PyPI to avoid non-installable pins.
         sleep(Duration::from_millis(200)).await;
-
-        let tools = fetch_repo_releases(&http, "frida", "frida-tools", include_prerelease).await?;
-
-        let tools_by_date = {
-            let mut v = tools;
-            v.sort_by_key(|r| r.published_at);
-            v
-        };
+        let mut objection_by_date =
+            fetch_repo_releases(&http, "sensepost", "objection", include_prerelease).await?;
+        objection_by_date.sort_by_key(|r| r.published_at);
+        let mut objection_exists_cache: HashMap<String, Option<bool>> = HashMap::new();
+        let mut tools_requires_cache: HashMap<String, Option<Vec<String>>> = HashMap::new();
 
         let mut mappings = HashMap::new();
 
         for fr in frida {
-            let nearest = find_nearest_by_date(&tools_by_date, fr.published_at);
-            if let Some(tools_release) = nearest {
+            let tools_release = if tools_from_pypi {
+                select_compatible_tools_release_for_frida(
+                    &http,
+                    &tools_by_date,
+                    &mut tools_requires_cache,
+                    &fr.version,
+                    fr.published_at,
+                )
+                .await?
+            } else {
+                select_release_near_future_or_previous(&tools_by_date, fr.published_at).cloned()
+            };
+
+            if let Some(tools_release) = tools_release {
+                let objection_release = select_objection_release_for_frida(
+                    &http,
+                    &objection_by_date,
+                    &mut objection_exists_cache,
+                    fr.published_at,
+                )
+                .await;
                 mappings.insert(
                     fr.version.to_string(),
                     VersionInfo {
                         tools: tools_release.version.to_string(),
+                        objection: objection_release,
                         released: fr.published_at.date_naive().to_string(),
                     },
                 );
@@ -208,7 +284,7 @@ impl VersionMapping {
             aliases,
             metadata: Metadata {
                 last_updated: Utc::now().date_naive().to_string(),
-                source: "https://github.com/frida/frida/releases.atom + https://github.com/frida/frida-tools/releases.atom".to_string(),
+                source: "https://github.com/frida/frida/releases.atom + https://pypi.org/pypi/frida-tools/json + https://github.com/sensepost/objection/releases.atom (filtered by PyPI availability)".to_string(),
             },
         })
     }
@@ -273,6 +349,66 @@ mod tests {
             .with_timezone(&Utc);
         let nearest = find_nearest_by_date(&tools, target).unwrap();
         assert_eq!(nearest.version.to_string(), "1.1.0");
+    }
+
+    #[test]
+    fn test_find_next_on_or_after_date() {
+        let releases = vec![
+            PypiRelease {
+                version: semver::Version::parse("1.0.0").unwrap(),
+                published_at: DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            },
+            PypiRelease {
+                version: semver::Version::parse("1.1.0").unwrap(),
+                published_at: DateTime::parse_from_rfc3339("2024-02-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            },
+        ];
+
+        let t1 = DateTime::parse_from_rfc3339("2024-01-20T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let next = find_next_on_or_after_date(&releases, t1).unwrap();
+        assert_eq!(next.version.to_string(), "1.1.0");
+
+        let t2 = DateTime::parse_from_rfc3339("2024-02-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let next = find_next_on_or_after_date(&releases, t2).unwrap();
+        assert_eq!(next.version.to_string(), "1.1.0");
+
+        let t3 = DateTime::parse_from_rfc3339("2024-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(find_next_on_or_after_date(&releases, t3).is_none());
+    }
+
+    #[test]
+    fn test_parse_frida_bounds_from_requires_dist() {
+        let reqs = vec![
+            "frida>=17.2.2".to_string(),
+            "otherpkg>=1.0.0".to_string(),
+            "frida<18.0.0".to_string(),
+        ];
+
+        let bounds = parse_frida_bounds_from_requires_dist(&reqs);
+        assert_eq!(bounds.min_inclusive.as_ref().unwrap().to_string(), "17.2.2");
+        assert_eq!(bounds.max_exclusive.as_ref().unwrap().to_string(), "18.0.0");
+    }
+
+    #[test]
+    fn test_tools_compatible_with_frida_bounds() {
+        let reqs = vec!["frida>=17.2.2".to_string(), "frida<18.0.0".to_string()];
+        let frida_ok = semver::Version::parse("17.5.0").unwrap();
+        let frida_too_low = semver::Version::parse("16.6.6").unwrap();
+        let frida_too_high = semver::Version::parse("18.0.0").unwrap();
+
+        assert!(tools_compatible_with_frida(Some(&reqs), &frida_ok));
+        assert!(!tools_compatible_with_frida(Some(&reqs), &frida_too_low));
+        assert!(!tools_compatible_with_frida(Some(&reqs), &frida_too_high));
     }
 
     #[test]
@@ -363,6 +499,12 @@ mod tests {
 
 #[derive(Debug, Clone)]
 struct NormalizedRelease {
+    version: semver::Version,
+    published_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct PypiRelease {
     version: semver::Version,
     published_at: DateTime<Utc>,
 }
@@ -793,6 +935,7 @@ fn extract_tag_from_title(title: &str) -> Option<&str> {
     None
 }
 
+#[cfg(test)]
 fn find_nearest_by_date<'a>(
     sorted_by_date: &'a [NormalizedRelease],
     target: DateTime<Utc>,
@@ -825,6 +968,380 @@ fn find_nearest_by_date<'a>(
         (None, Some(b)) => Some(b),
         (None, None) => None,
     }
+}
+
+#[cfg(test)]
+fn find_next_on_or_after_date<'a>(
+    sorted_by_date: &'a [PypiRelease],
+    target: DateTime<Utc>,
+) -> Option<&'a PypiRelease> {
+    if sorted_by_date.is_empty() {
+        return None;
+    }
+
+    let idx = match sorted_by_date.binary_search_by_key(&target, |r| r.published_at) {
+        Ok(i) => i,
+        Err(i) => i,
+    };
+
+    sorted_by_date.get(idx)
+}
+
+fn find_next_on_or_after_date_github<'a>(
+    sorted_by_date: &'a [NormalizedRelease],
+    target: DateTime<Utc>,
+) -> Option<&'a NormalizedRelease> {
+    if sorted_by_date.is_empty() {
+        return None;
+    }
+
+    let idx = match sorted_by_date.binary_search_by_key(&target, |r| r.published_at) {
+        Ok(i) => i,
+        Err(i) => i,
+    };
+
+    sorted_by_date.get(idx)
+}
+
+async fn pypi_version_exists_cached(
+    http: &HttpClient,
+    cache: &mut HashMap<String, Option<bool>>,
+    package: &str,
+    version: &semver::Version,
+) -> Option<bool> {
+    let key = format!("{}=={}", package, version);
+    if let Some(v) = cache.get(&key) {
+        return *v;
+    }
+
+    let url = format!("https://pypi.org/pypi/{}/{}/json", package, version);
+    let exists = match http.url_exists(&url).await {
+        Ok(v) => Some(v),
+        Err(_) => None,
+    };
+    cache.insert(key, exists);
+    exists
+}
+
+async fn select_objection_release_for_frida(
+    http: &HttpClient,
+    objection_sorted_by_date: &[NormalizedRelease],
+    exists_cache: &mut HashMap<String, Option<bool>>,
+    frida_published_at: DateTime<Utc>,
+) -> Option<String> {
+    let idx = match objection_sorted_by_date
+        .binary_search_by_key(&frida_published_at, |r| r.published_at)
+    {
+        Ok(i) => i,
+        Err(i) => i,
+    };
+
+    // Prefer the first release on/after Frida that is known to exist on PyPI.
+    for cand in objection_sorted_by_date.iter().skip(idx).take(30) {
+        match pypi_version_exists_cached(http, exists_cache, "objection", &cand.version).await {
+            Some(false) => continue,
+            Some(true) | None => return Some(cand.version.to_string()),
+        }
+    }
+
+    // Fallback: search backward if nothing suitable exists after.
+    for cand in objection_sorted_by_date.iter().take(idx).rev().take(30) {
+        match pypi_version_exists_cached(http, exists_cache, "objection", &cand.version).await {
+            Some(false) => continue,
+            Some(true) | None => return Some(cand.version.to_string()),
+        }
+    }
+
+    // Last resort: keep mapping non-empty.
+    find_next_on_or_after_date_github(objection_sorted_by_date, frida_published_at)
+        .map(|r| r.version.to_string())
+        .or_else(|| {
+            objection_sorted_by_date
+                .last()
+                .map(|r| r.version.to_string())
+        })
+}
+
+fn select_release_near_future_or_previous<'a>(
+    sorted_by_date: &'a [PypiRelease],
+    target: DateTime<Utc>,
+) -> Option<&'a PypiRelease> {
+    const MAX_FORWARD_LOOKAHEAD_DAYS: i64 = 21;
+
+    if sorted_by_date.is_empty() {
+        return None;
+    }
+
+    let idx = match sorted_by_date.binary_search_by_key(&target, |r| r.published_at) {
+        Ok(i) => i,
+        Err(i) => i,
+    };
+
+    let forward_deadline = target + ChronoDuration::days(MAX_FORWARD_LOOKAHEAD_DAYS);
+    if let Some(next) = sorted_by_date.get(idx) {
+        if next.published_at <= forward_deadline {
+            return Some(next);
+        }
+    }
+
+    idx.checked_sub(1)
+        .and_then(|i| sorted_by_date.get(i))
+        .or_else(|| sorted_by_date.first())
+}
+
+async fn fetch_pypi_releases(
+    http: &HttpClient,
+    package: &str,
+    include_prerelease: bool,
+) -> Result<Vec<PypiRelease>> {
+    #[derive(Debug, Deserialize)]
+    struct PypiIndex {
+        releases: HashMap<String, Vec<PypiFile>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PypiFile {
+        upload_time_iso_8601: Option<String>,
+        upload_time: Option<String>,
+        yanked: Option<bool>,
+    }
+
+    let url = format!("https://pypi.org/pypi/{}/json", package);
+    let index: PypiIndex = http.fetch_json(&url).await?;
+
+    let mut out: Vec<PypiRelease> = Vec::new();
+    for (version_str, files) in index.releases {
+        let v = match semver::Version::parse(version_str.trim_start_matches('v')) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if !include_prerelease && !v.pre.is_empty() {
+            continue;
+        }
+
+        let mut best: Option<DateTime<Utc>> = None;
+        let mut any_non_yanked = false;
+        for f in files {
+            if f.yanked.unwrap_or(false) {
+                continue;
+            }
+            any_non_yanked = true;
+            let dt_str = f
+                .upload_time_iso_8601
+                .as_deref()
+                .or(f.upload_time.as_deref());
+            let Some(dt_str) = dt_str else {
+                continue;
+            };
+            let dt = match DateTime::parse_from_rfc3339(dt_str) {
+                Ok(v) => v.with_timezone(&Utc),
+                Err(_) => continue,
+            };
+            best = match best {
+                Some(current) if current <= dt => Some(current),
+                Some(_) => Some(dt),
+                None => Some(dt),
+            };
+        }
+
+        if !any_non_yanked {
+            continue;
+        }
+        let Some(published_at) = best else {
+            continue;
+        };
+
+        out.push(PypiRelease {
+            version: v,
+            published_at,
+        });
+    }
+
+    out.sort_by_key(|r| r.published_at);
+    Ok(out)
+}
+
+async fn fetch_pypi_requires_dist(
+    http: &HttpClient,
+    package: &str,
+    version: &semver::Version,
+) -> Result<Option<Vec<String>>> {
+    #[derive(Debug, Deserialize)]
+    struct PypiVersionInfo {
+        info: PypiInfo,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PypiInfo {
+        requires_dist: Option<Vec<String>>,
+    }
+
+    let url = format!("https://pypi.org/pypi/{}/{}/json", package, version);
+    let info: PypiVersionInfo = http.fetch_json(&url).await?;
+    Ok(info.info.requires_dist)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VersionBounds {
+    min_inclusive: Option<semver::Version>,
+    max_exclusive: Option<semver::Version>,
+}
+
+fn parse_frida_bounds_from_requires_dist(requires_dist: &[String]) -> VersionBounds {
+    let mut bounds = VersionBounds {
+        min_inclusive: None,
+        max_exclusive: None,
+    };
+
+    for raw in requires_dist {
+        let requirement = raw.split(';').next().unwrap_or(raw).trim();
+        let requirement = requirement
+            .trim_start_matches("frida")
+            .trim()
+            .trim_start_matches(|c: char| c == '(' || c.is_whitespace())
+            .trim_end_matches(')')
+            .trim();
+
+        // Only process lines that actually refer to frida.
+        if !raw.trim_start().starts_with("frida") {
+            continue;
+        }
+
+        for part in requirement
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let (op, ver) = if let Some(rest) = part.strip_prefix(">=") {
+                (">=", rest)
+            } else if let Some(rest) = part.strip_prefix("<=") {
+                ("<=", rest)
+            } else if let Some(rest) = part.strip_prefix("==") {
+                ("==", rest)
+            } else if let Some(rest) = part.strip_prefix("<") {
+                ("<", rest)
+            } else if let Some(rest) = part.strip_prefix(">") {
+                (">", rest)
+            } else {
+                continue;
+            };
+
+            let ver = ver.trim().trim_start_matches('v');
+            let Ok(v) = semver::Version::parse(ver) else {
+                continue;
+            };
+
+            match op {
+                ">=" => {
+                    let replace = match bounds.min_inclusive.as_ref() {
+                        None => true,
+                        Some(cur) => v > *cur,
+                    };
+                    if replace {
+                        bounds.min_inclusive = Some(v);
+                    }
+                }
+                "<" => {
+                    let replace = match bounds.max_exclusive.as_ref() {
+                        None => true,
+                        Some(cur) => v < *cur,
+                    };
+                    if replace {
+                        bounds.max_exclusive = Some(v);
+                    }
+                }
+                // Best-effort only; ignore the rest for now.
+                _ => {}
+            }
+        }
+    }
+
+    bounds
+}
+
+fn tools_compatible_with_frida(
+    tools_requires_dist: Option<&[String]>,
+    frida: &semver::Version,
+) -> bool {
+    let Some(reqs) = tools_requires_dist else {
+        return true;
+    };
+    let bounds = parse_frida_bounds_from_requires_dist(reqs);
+    if let Some(min) = bounds.min_inclusive.as_ref() {
+        if frida < min {
+            return false;
+        }
+    }
+    if let Some(max) = bounds.max_exclusive.as_ref() {
+        if frida >= max {
+            return false;
+        }
+    }
+    true
+}
+
+async fn select_compatible_tools_release_for_frida(
+    http: &HttpClient,
+    tools_sorted_by_date: &[PypiRelease],
+    requires_cache: &mut HashMap<String, Option<Vec<String>>>,
+    frida_version: &semver::Version,
+    frida_published_at: DateTime<Utc>,
+) -> Result<Option<PypiRelease>> {
+    const MAX_FORWARD_LOOKAHEAD_DAYS: i64 = 21;
+
+    if tools_sorted_by_date.is_empty() {
+        return Ok(None);
+    }
+
+    let idx =
+        match tools_sorted_by_date.binary_search_by_key(&frida_published_at, |r| r.published_at) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+
+    let forward_deadline = frida_published_at + ChronoDuration::days(MAX_FORWARD_LOOKAHEAD_DAYS);
+    let forward_candidates = tools_sorted_by_date
+        .iter()
+        .skip(idx)
+        .take_while(|r| r.published_at <= forward_deadline);
+
+    for cand in forward_candidates {
+        let key = cand.version.to_string();
+        let requires = match requires_cache.get(&key) {
+            Some(v) => v.clone(),
+            None => {
+                let v = fetch_pypi_requires_dist(http, "frida-tools", &cand.version).await?;
+                requires_cache.insert(key.clone(), v.clone());
+                v
+            }
+        };
+
+        if tools_compatible_with_frida(requires.as_deref(), frida_version) {
+            return Ok(Some(cand.clone()));
+        }
+    }
+
+    for cand in tools_sorted_by_date[..idx].iter().rev() {
+        let key = cand.version.to_string();
+        let requires = match requires_cache.get(&key) {
+            Some(v) => v.clone(),
+            None => {
+                let v = fetch_pypi_requires_dist(http, "frida-tools", &cand.version).await?;
+                requires_cache.insert(key.clone(), v.clone());
+                v
+            }
+        };
+
+        if tools_compatible_with_frida(requires.as_deref(), frida_version) {
+            return Ok(Some(cand.clone()));
+        }
+    }
+
+    // Last resort: pick the closest-by-time entry (may be incompatible, but avoids empty mappings).
+    let fallback = tools_sorted_by_date
+        .get(idx)
+        .or_else(|| tools_sorted_by_date.last());
+    Ok(fallback.cloned())
 }
 
 fn build_default_aliases(mappings: &HashMap<String, VersionInfo>) -> HashMap<String, String> {

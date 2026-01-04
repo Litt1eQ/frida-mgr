@@ -9,6 +9,12 @@ pub struct VenvExecutor {
     project_dir: PathBuf,
 }
 
+pub struct CapturedOutput {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
 impl VenvExecutor {
     pub fn new(project_dir: PathBuf) -> Self {
         let venv_path = project_dir.join(".venv");
@@ -76,6 +82,45 @@ impl VenvExecutor {
             })?;
 
         Ok(status.code().unwrap_or(1))
+    }
+
+    /// Run a command in the virtual environment and capture stdout/stderr.
+    pub async fn run_captured(&self, command: &str, args: &[String]) -> Result<CapturedOutput> {
+        if !self.venv_exists() {
+            return Err(FridaMgrError::PythonEnv(
+                "Virtual environment not found. Run 'frida-mgr init' first.".to_string(),
+            ));
+        }
+
+        let executable = self.get_executable_path(command);
+
+        if !executable.exists() {
+            return Err(FridaMgrError::PythonEnv(format!(
+                "Command '{}' not found in virtual environment. Is it installed?",
+                command
+            )));
+        }
+
+        let bin_dir = self.get_venv_bin_dir();
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let new_path = format!("{}:{}", bin_dir.display(), original_path);
+
+        let output = Command::new(&executable)
+            .args(args)
+            .env("VIRTUAL_ENV", &self.venv_path)
+            .env("PATH", new_path)
+            .current_dir(&self.project_dir)
+            .output()
+            .await
+            .map_err(|e| {
+                FridaMgrError::CommandFailed(format!("Failed to execute {}: {}", command, e))
+            })?;
+
+        Ok(CapturedOutput {
+            exit_code: output.status.code().unwrap_or(1),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
     }
 
     /// Spawn an interactive shell in the virtual environment

@@ -134,6 +134,28 @@ impl HttpClient {
             .map_err(|e| FridaMgrError::Download(format!("Failed to parse JSON: {}", e)))?;
         Ok(data)
     }
+
+    pub async fn url_exists(&self, url: &str) -> Result<bool> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| FridaMgrError::Download(format!("Failed to fetch {}: {}", url, e)))?;
+
+        let status = response.status();
+        if status.as_u16() == 404 {
+            return Ok(false);
+        }
+        if status.is_success() {
+            return Ok(true);
+        }
+
+        Err(FridaMgrError::Download(format!(
+            "HTTP error {}: {}",
+            status, url
+        )))
+    }
 }
 
 impl Default for HttpClient {

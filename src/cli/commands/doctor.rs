@@ -68,6 +68,10 @@ pub async fn execute() -> Result<()> {
         if let Ok(Some(version)) = uv_mgr.get_installed_version("frida-tools").await {
             println!("  Frida-tools: {}", version.cyan());
         }
+
+        if let Ok(Some(version)) = uv_mgr.get_installed_version("objection").await {
+            println!("  Objection: {}", version.cyan());
+        }
     } else {
         println!("{}", "○ Not initialized".yellow());
         println!("  Run {} to initialize", "frida-mgr init".cyan());

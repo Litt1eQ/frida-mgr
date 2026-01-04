@@ -1,5 +1,6 @@
 use crate::config::schema::{AndroidServerSource, ProjectConfig};
 use crate::core::error::{FridaMgrError, Result};
+use semver::Version;
 
 pub fn validate_android_server_name(name: &str) -> Result<()> {
     if name.is_empty() {
@@ -55,6 +56,20 @@ pub fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         return Err(FridaMgrError::Config(
             "frida.version cannot be empty".to_string(),
         ));
+    }
+
+    if let Some(v) = config.objection.version.as_deref() {
+        if v.trim().is_empty() {
+            return Err(FridaMgrError::Config(
+                "objection.version cannot be empty when provided".to_string(),
+            ));
+        }
+        if Version::parse(v).is_err() {
+            return Err(FridaMgrError::Config(format!(
+                "Invalid objection.version '{}'; expected a semantic version like '1.11.0'",
+                v
+            )));
+        }
     }
 
     if let Some(name) = config.android.server_name.as_deref() {

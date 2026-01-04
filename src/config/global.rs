@@ -77,6 +77,10 @@ impl GlobalConfigManager {
     pub fn get_version_map_path(&self) -> PathBuf {
         self.config_dir.join("version-map.toml")
     }
+
+    pub fn get_version_overrides_path(&self) -> PathBuf {
+        self.config_dir.join("version-overrides.toml")
+    }
 }
 
 impl Default for GlobalConfigManager {

@@ -138,10 +138,7 @@ impl UvManager {
             ));
         }
 
-        println!(
-            "{} Extra Python packages installed",
-            "✓".green().bold()
-        );
+        println!("{} Extra Python packages installed", "✓".green().bold());
 
         Ok(())
     }
@@ -150,6 +147,7 @@ impl UvManager {
         &self,
         frida_version: &str,
         tools_version: Option<&str>,
+        allow_tools_unpinned_fallback: bool,
     ) -> Result<()> {
         Self::check_installed()?;
 
@@ -163,7 +161,14 @@ impl UvManager {
             tools_label.cyan()
         );
 
-        install_frida_packages(&python_path, frida_version, tools_version, false).await?;
+        install_frida_packages(
+            &python_path,
+            frida_version,
+            tools_version,
+            false,
+            allow_tools_unpinned_fallback,
+        )
+        .await?;
 
         println!(
             "{} Frida packages installed successfully",
@@ -177,6 +182,7 @@ impl UvManager {
         &self,
         frida_version: &str,
         tools_version: Option<&str>,
+        allow_tools_unpinned_fallback: bool,
     ) -> Result<()> {
         Self::check_installed()?;
 
@@ -190,9 +196,76 @@ impl UvManager {
             tools_label.cyan()
         );
 
-        install_frida_packages(&python_path, frida_version, tools_version, true).await?;
+        install_frida_packages(
+            &python_path,
+            frida_version,
+            tools_version,
+            true,
+            allow_tools_unpinned_fallback,
+        )
+        .await?;
 
         println!("{} Frida packages upgraded", "✓".green().bold());
+
+        Ok(())
+    }
+
+    pub async fn install_objection(
+        &self,
+        objection_version: Option<&str>,
+        allow_unpinned_fallback: bool,
+    ) -> Result<()> {
+        Self::check_installed()?;
+
+        let python_path = self.get_python_path()?;
+
+        let label = objection_version.unwrap_or("auto");
+        println!(
+            "{} Installing objection=={}...",
+            "⚙".blue().bold(),
+            label.cyan()
+        );
+
+        install_optional_pinned_package(
+            &python_path,
+            "objection",
+            objection_version,
+            false,
+            allow_unpinned_fallback,
+        )
+        .await?;
+
+        println!("{} Objection installed successfully", "✓".green().bold());
+
+        Ok(())
+    }
+
+    pub async fn upgrade_objection(
+        &self,
+        objection_version: Option<&str>,
+        allow_unpinned_fallback: bool,
+    ) -> Result<()> {
+        Self::check_installed()?;
+
+        let python_path = self.get_python_path()?;
+
+        let label = objection_version.unwrap_or("auto");
+        println!(
+            "{} Upgrading objection=={}...",
+            "⚙".blue().bold(),
+            label.cyan()
+        );
+
+        install_optional_pinned_package(
+            &python_path,
+            "objection",
+            objection_version,
+            true,
+            allow_unpinned_fallback,
+        )
+        .await?;
+
+        println!("{} Objection upgraded", "✓".green().bold());
 
         Ok(())
     }
@@ -315,6 +388,7 @@ async fn install_frida_packages(
     frida_version: &str,
     tools_version: Option<&str>,
     upgrade: bool,
+    allow_unpinned_fallback: bool,
 ) -> Result<()> {
     let mut current_tools_version = tools_version;
     let mut retried_unpinned = false;
@@ -365,7 +439,8 @@ async fn install_frida_packages(
         }
 
         // If the pinned frida-tools version doesn't exist / can't be resolved, retry unpinned once.
-        let should_retry_unpinned = current_tools_version.is_some()
+        let should_retry_unpinned = allow_unpinned_fallback
+            && current_tools_version.is_some()
             && !retried_unpinned
             && (stderr.contains("no version of frida-tools==")
                 || stderr.contains("there is no version of frida-tools==")
@@ -385,6 +460,89 @@ async fn install_frida_packages(
         return Err(FridaMgrError::PythonEnv(
             "Failed to install Frida packages. See output above for details.".to_string(),
         ));
+    }
+}
+
+async fn install_optional_pinned_package(
+    python_path: &PathBuf,
+    package: &str,
+    pinned_version: Option<&str>,
+    upgrade: bool,
+    allow_unpinned_fallback: bool,
+) -> Result<()> {
+    let mut current_version = pinned_version;
+    let mut retried_unpinned = false;
+
+    loop {
+        let mut args: Vec<String> = vec![
+            "pip".to_string(),
+            "install".to_string(),
+            "--python".to_string(),
+            python_path.to_str().unwrap().to_string(),
+        ];
+
+        if upgrade {
+            args.push("--upgrade".to_string());
+        }
+
+        match current_version {
+            Some(v) => args.push(format!("{}=={}", package, v)),
+            None => args.push(package.to_string()),
+        }
+
+        let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let output = ProcessExecutor::execute("uv", &args_ref, None).await?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        eprintln!(
+            "\n{}",
+            if upgrade {
+                "Upgrade output:"
+            } else {
+                "Installation output:"
+            }
+            .yellow()
+            .bold()
+        );
+        if !stdout.is_empty() {
+            eprintln!("{}", stdout);
+        }
+        if !stderr.is_empty() {
+            eprintln!("{}", stderr);
+        }
+
+        let should_retry_unpinned = allow_unpinned_fallback
+            && current_version.is_some()
+            && !retried_unpinned
+            && (stderr.contains(&format!("no version of {}==", package))
+                || stderr.contains(&format!("there is no version of {}==", package))
+                || stderr.contains("No solution found"));
+
+        if should_retry_unpinned {
+            eprintln!(
+                "\n{} {}",
+                "⚠".yellow().bold(),
+                format!(
+                    "Pinned {} version failed; retrying with unpinned {}...",
+                    package, package
+                )
+                .yellow()
+            );
+            retried_unpinned = true;
+            current_version = None;
+            continue;
+        }
+
+        return Err(FridaMgrError::PythonEnv(format!(
+            "Failed to install {}. See output above for details.",
+            package
+        )));
     }
 }
 

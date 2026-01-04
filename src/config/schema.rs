@@ -8,6 +8,8 @@ pub struct ProjectConfig {
     pub project: ProjectMeta,
     pub python: PythonConfig,
     pub frida: FridaConfig,
+    #[serde(default)]
+    pub objection: ObjectionConfig,
     pub android: AndroidConfig,
     #[serde(default)]
     pub environment: HashMap<String, String>,
@@ -32,6 +34,12 @@ pub struct FridaConfig {
     pub version: String,
     #[serde(default)]
     pub tools_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ObjectionConfig {
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -155,6 +163,7 @@ impl Default for ProjectConfig {
                 version: "16.6.6".to_string(),
                 tools_version: None,
             },
+            objection: ObjectionConfig { version: None },
             android: AndroidConfig {
                 arch: default_arch(),
                 server_name: Some(default_server_name()),

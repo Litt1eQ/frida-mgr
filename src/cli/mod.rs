@@ -51,6 +51,10 @@ pub enum Commands {
         /// frida-tools version to install (required when --server-source=local)
         #[arg(long, required_if_eq("server_source", "local"))]
         frida_tools: Option<String>,
+
+        /// objection version to install (default: mapped by frida version, or let uv resolve)
+        #[arg(long)]
+        objection: Option<String>,
     },
 
     /// Install and switch to a specific Frida version
@@ -122,6 +126,14 @@ pub enum Commands {
         args: Vec<String>,
     },
 
+    /// Run objection with the project's virtual environment
+    #[command(name = "objection")]
+    Objection {
+        /// Arguments to pass to objection (e.g., -g com.example.app explore)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// Attach to the current foreground app and run frida (auto-detect process name)
     #[command(name = "top", visible_alias = "fg")]
     Top {
@@ -134,6 +146,34 @@ pub enum Commands {
         scripts: Vec<String>,
 
         /// Extra frida arguments (excluding device/target selection)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Spawn the current foreground app and run frida
+    #[command(name = "spawn", visible_alias = "sp")]
+    Spawn {
+        /// Device ID (default: first connected device)
+        #[arg(short, long)]
+        device: Option<String>,
+
+        /// JavaScript script to load (-l); can be repeated
+        #[arg(short = 'l', long = "load")]
+        scripts: Vec<String>,
+
+        /// Extra frida arguments (excluding device/target selection)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Run objection for the current foreground app (defaults to `explore`)
+    #[command(name = "objection-fg", visible_alias = "og")]
+    ObjectionFg {
+        /// Device ID (default: first connected device)
+        #[arg(short, long)]
+        device: Option<String>,
+
+        /// Objection arguments after the auto-injected target selector (e.g., `--name <package>`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -203,6 +243,7 @@ pub async fn run(cli: Cli) -> crate::core::error::Result<()> {
             server_source,
             local_server_path,
             frida_tools,
+            objection,
         } => {
             commands::init::execute(
                 frida,
@@ -212,6 +253,7 @@ pub async fn run(cli: Cli) -> crate::core::error::Result<()> {
                 server_source,
                 local_server_path,
                 frida_tools,
+                objection,
             )
             .await
         }
@@ -236,11 +278,23 @@ pub async fn run(cli: Cli) -> crate::core::error::Result<()> {
 
         Commands::Frida { args } => commands::frida::execute(args).await,
 
+        Commands::Objection { args } => commands::objection::execute(args).await,
+
         Commands::Top {
             device,
             scripts,
             args,
         } => commands::top::execute(device, scripts, args).await,
+
+        Commands::Spawn {
+            device,
+            scripts,
+            args,
+        } => commands::spawn::execute(device, scripts, args).await,
+
+        Commands::ObjectionFg { device, args } => {
+            commands::objection_fg::execute(device, args).await
+        }
 
         Commands::Ps { args } => commands::run::execute("frida-ps".to_string(), args).await,
 

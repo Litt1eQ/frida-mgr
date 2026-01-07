@@ -25,10 +25,10 @@ jobs:
           - runner: windows-latest
             os: windows
             target: x86_64-pc-windows-msvc
-          - runner: macos-13
+          - runner: macos-15-intel
             os: macos
             target: x86_64-apple-darwin
-          - runner: macos-14
+          - runner: macos-latest
             os: macos
             target: aarch64-apple-darwin
 

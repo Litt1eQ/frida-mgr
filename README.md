@@ -7,6 +7,7 @@
 - 项目级配置：在项目根目录生成 `frida.toml`
 - Python 环境：使用 `uv` 创建 `.venv`，并在其中安装/升级 `frida` 与 `frida-tools`
 - 工具集成：在同一虚拟环境中安装/升级 `objection`，并支持命令透传
+- Agent 脚手架：生成 TypeScript agent 模板，并可构建后与 `top/spawn --agent` 串联使用
 - 版本管理：支持 `latest` / `stable` / `lts` 等别名；可刷新版本映射
 - Android 设备管理：基于 `adb` 列设备、推送 `frida-server`、启动/停止/查看状态
 - 便捷命令：`frida-mgr frida` / `objection` / `ps` / `trace` / `run` / `top(fg)` / `spawn(sp)` / `objection-fg(og)` 等在虚拟环境中运行
@@ -110,6 +111,8 @@ frida-mgr frida -U -f com.example.app -l agent.js --no-pause
 - `frida-mgr spawn|objection-fg`：对前台应用执行 spawn / objection（自动选设备与目标）
 - `frida-mgr shell`：进入虚拟环境 shell
 - `frida-mgr uv ...` / `frida-mgr pip ...`：透传调用 `uv` / `uv pip`（`pip` 会自动选择项目 `.venv` 的 Python）
+- `frida-mgr agent init`：生成 agent 脚手架（默认目录 `./agent`）
+- `frida-mgr agent build`：构建 agent（输出默认 `./agent/dist/agent.js`）
 
 ## 配置文件（frida.toml）
 
@@ -146,6 +149,14 @@ source = "download"
 # source = "local"
 # [android.server.local]
 # path = "./bin/frida-server"
+
+[agent]
+dir = "agent"
+entry = "src/index.ts"
+out = "dist/agent.js"
+tool = "frida-compile" # 或 "esbuild"
+
+# agent 目录生成后，需要先在 agent 目录执行一次 npm install（用于安装 frida-compile/esbuild/typescript/@types/frida-gum）。
 ```
 
 与推送相关的行为：

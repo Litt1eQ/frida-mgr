@@ -11,7 +11,7 @@ pub use global::GlobalConfigManager;
 pub use overrides::VersionOverrides;
 pub use project::ProjectConfigManager;
 pub use schema::{
-    AndroidServerSource, ArchType, GlobalConfig, LocalServerConfig, ProjectConfig,
+    AgentBuildTool, AndroidServerSource, ArchType, GlobalConfig, LocalServerConfig, ProjectConfig,
     DEFAULT_ANDROID_SERVER_NAME,
 };
 pub use validation::{validate_android_server_name, validate_project_config};

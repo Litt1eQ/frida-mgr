@@ -88,6 +88,18 @@ pub fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         ));
     }
 
+    if config.agent.dir.trim().is_empty() {
+        return Err(FridaMgrError::Config("agent.dir cannot be empty".to_string()));
+    }
+
+    if config.agent.entry.trim().is_empty() {
+        return Err(FridaMgrError::Config("agent.entry cannot be empty".to_string()));
+    }
+
+    if config.agent.out.trim().is_empty() {
+        return Err(FridaMgrError::Config("agent.out cannot be empty".to_string()));
+    }
+
     if config.android.server.source == AndroidServerSource::Local {
         let tools_version_ok = config
             .frida

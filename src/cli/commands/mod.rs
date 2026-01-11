@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod devices;
 pub mod doctor;
 pub mod foreground;
@@ -10,6 +11,7 @@ pub mod objection_fg;
 pub mod pip;
 pub mod push;
 pub mod run;
+pub mod script;
 pub mod shell;
 pub mod spawn;
 pub mod start;

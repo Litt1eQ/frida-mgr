@@ -3,6 +3,63 @@ use std::collections::HashMap;
 
 pub const DEFAULT_ANDROID_SERVER_NAME: &str = "frida-server";
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentBuildTool {
+    FridaCompile,
+    Esbuild,
+}
+
+impl Default for AgentBuildTool {
+    fn default() -> Self {
+        Self::FridaCompile
+    }
+}
+
+impl AgentBuildTool {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentBuildTool::FridaCompile => "frida-compile",
+            AgentBuildTool::Esbuild => "esbuild",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentConfig {
+    /// Agent project directory, relative to project root.
+    #[serde(default = "default_agent_dir")]
+    pub dir: String,
+    /// Entry file, relative to agent dir.
+    #[serde(default = "default_agent_entry")]
+    pub entry: String,
+    /// Output JS bundle path, relative to agent dir.
+    #[serde(default = "default_agent_out")]
+    pub out: String,
+    #[serde(default)]
+    pub tool: AgentBuildTool,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_agent_dir(),
+            entry: default_agent_entry(),
+            out: default_agent_out(),
+            tool: AgentBuildTool::default(),
+        }
+    }
+}
+
+impl AgentConfig {
+    fn is_default(&self) -> bool {
+        self.dir == default_agent_dir()
+            && self.entry == default_agent_entry()
+            && self.out == default_agent_out()
+            && self.tool == AgentBuildTool::default()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProjectConfig {
     pub project: ProjectMeta,
@@ -11,6 +68,8 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub objection: ObjectionConfig,
     pub android: AndroidConfig,
+    #[serde(default, skip_serializing_if = "AgentConfig::is_default")]
+    pub agent: AgentConfig,
     #[serde(default)]
     pub environment: HashMap<String, String>,
 }
@@ -148,6 +207,18 @@ fn default_root_command() -> String {
     "su".to_string()
 }
 
+fn default_agent_dir() -> String {
+    "agent".to_string()
+}
+
+fn default_agent_entry() -> String {
+    "src/index.ts".to_string()
+}
+
+fn default_agent_out() -> String {
+    "dist/agent.js".to_string()
+}
+
 impl Default for ProjectConfig {
     fn default() -> Self {
         Self {
@@ -172,6 +243,7 @@ impl Default for ProjectConfig {
                 root_command: default_root_command(),
                 server: AndroidServerConfig::default(),
             },
+            agent: AgentConfig::default(),
             environment: HashMap::new(),
         }
     }

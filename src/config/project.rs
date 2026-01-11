@@ -19,7 +19,8 @@ impl ProjectConfigManager {
 
     pub fn from_current_dir() -> Result<Self> {
         let current_dir = std::env::current_dir()?;
-        Ok(Self::new(&current_dir))
+        let project_dir = Self::find_project_root(&current_dir).unwrap_or(current_dir);
+        Ok(Self::new(&project_dir))
     }
 
     pub fn config_path(&self) -> &Path {

@@ -1,11 +1,27 @@
 pub mod commands;
 
+use crate::config::AgentBuildTool;
 use clap::{Parser, Subcommand};
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum InitServerSource {
     Download,
     Local,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum AgentTool {
+    FridaCompile,
+    Esbuild,
+}
+
+impl From<AgentTool> for AgentBuildTool {
+    fn from(value: AgentTool) -> Self {
+        match value {
+            AgentTool::FridaCompile => AgentBuildTool::FridaCompile,
+            AgentTool::Esbuild => AgentBuildTool::Esbuild,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -18,6 +34,35 @@ pub enum InitServerSource {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum AgentCommands {
+    /// Create an agent TypeScript project scaffold
+    Init {
+        /// Agent directory (default: from frida.toml agent.dir, or "agent")
+        #[arg(long)]
+        dir: Option<String>,
+
+        /// Build tool to use (default: from frida.toml agent.tool)
+        #[arg(long, value_enum)]
+        tool: Option<AgentTool>,
+
+        /// Overwrite existing files
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Build the agent bundle
+    Build {
+        /// Agent directory (default: from frida.toml agent.dir, or "agent")
+        #[arg(long)]
+        dir: Option<String>,
+
+        /// Build tool to use (default: from frida.toml agent.tool)
+        #[arg(long, value_enum)]
+        tool: Option<AgentTool>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -141,6 +186,14 @@ pub enum Commands {
         #[arg(short, long)]
         device: Option<String>,
 
+        /// Build a project agent and load it (-l); pass a directory or omit value for default "agent"
+        #[arg(long, num_args = 0..=1, default_missing_value = "agent", value_name = "DIR")]
+        agent: Option<String>,
+
+        /// Agent build tool override (default: from frida.toml agent.tool)
+        #[arg(long, value_enum)]
+        agent_tool: Option<AgentTool>,
+
         /// JavaScript script to load (-l); can be repeated
         #[arg(short = 'l', long = "load")]
         scripts: Vec<String>,
@@ -156,6 +209,14 @@ pub enum Commands {
         /// Device ID (default: first connected device)
         #[arg(short, long)]
         device: Option<String>,
+
+        /// Build a project agent and load it (-l); pass a directory or omit value for default "agent"
+        #[arg(long, num_args = 0..=1, default_missing_value = "agent", value_name = "DIR")]
+        agent: Option<String>,
+
+        /// Agent build tool override (default: from frida.toml agent.tool)
+        #[arg(long, value_enum)]
+        agent_tool: Option<AgentTool>,
 
         /// JavaScript script to load (-l); can be repeated
         #[arg(short = 'l', long = "load")]
@@ -231,6 +292,12 @@ pub enum Commands {
         #[arg(long)]
         recreate_venv: bool,
     },
+
+    /// Manage TypeScript agent scaffold/build
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
+    },
 }
 
 pub async fn run(cli: Cli) -> crate::core::error::Result<()> {
@@ -282,15 +349,22 @@ pub async fn run(cli: Cli) -> crate::core::error::Result<()> {
 
         Commands::Top {
             device,
+            agent,
+            agent_tool,
             scripts,
             args,
-        } => commands::top::execute(device, scripts, args).await,
+        } => {
+            commands::top::execute(device, agent, agent_tool.map(Into::into), scripts, args).await
+        }
 
         Commands::Spawn {
             device,
+            agent,
+            agent_tool,
             scripts,
             args,
-        } => commands::spawn::execute(device, scripts, args).await,
+        } => commands::spawn::execute(device, agent, agent_tool.map(Into::into), scripts, args)
+            .await,
 
         Commands::ObjectionFg { device, args } => {
             commands::objection_fg::execute(device, args).await
@@ -312,5 +386,14 @@ pub async fn run(cli: Cli) -> crate::core::error::Result<()> {
             no_project,
             recreate_venv,
         } => commands::sync::execute(update_map, prerelease, no_project, recreate_venv).await,
+
+        Commands::Agent { command } => match command {
+            AgentCommands::Init { dir, tool, force } => {
+                commands::agent::init(dir, tool.map(Into::into), force).await
+            }
+            AgentCommands::Build { dir, tool } => {
+                commands::agent::build(dir, tool.map(Into::into)).await
+            }
+        },
     }
 }

@@ -25,6 +25,29 @@ pub async fn execute() -> Result<()> {
         all_ok = false;
     }
 
+    // Check Node.js (optional, for agent build)
+    print!("Checking node... ");
+    if ProcessExecutor::check_command_exists("node") {
+        let version = ProcessExecutor::execute_with_output("node", &["--version"]).await;
+        match version {
+            Ok(v) => println!("{} ({})", "✓".green(), v.trim().yellow()),
+            Err(_) => println!("{}", "✓".green()),
+        }
+    } else {
+        println!("{}", "○ Not found (agent build disabled)".yellow());
+    }
+
+    print!("Checking npm... ");
+    if ProcessExecutor::check_command_exists("npm") {
+        let version = ProcessExecutor::execute_with_output("npm", &["--version"]).await;
+        match version {
+            Ok(v) => println!("{} ({})", "✓".green(), v.trim().yellow()),
+            Err(_) => println!("{}", "✓".green()),
+        }
+    } else {
+        println!("{}", "○ Not found (agent build disabled)".yellow());
+    }
+
     // Check ADB
     print!("Checking adb... ");
     let global_config = GlobalConfigManager::new()?.load().await?;
